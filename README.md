@@ -15,7 +15,7 @@ computation phase, not graph loading.
 ## Results
 
 Single 64-core node (AMD EPYC 9334), 2 OpenMP threads per MPI rank, synthetic dense graphs
-(`m = n^2 / 4`). Best of three runs:
+(approximately `m = n^2 / 4`). Best of three runs:
 
 | Graph | Best speedup | Median speedup | Time at best speedup | Configuration |
 |---:|---:|---:|---:|---|
