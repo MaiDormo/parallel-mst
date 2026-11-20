@@ -57,6 +57,19 @@ Memory is O(V^2) per rank because every rank holds the full matrix. At 80k verti
 12.8 GB per matrix, or 25.6 GB for the graph plus MST, which is why the 80k runs require a
 large-memory node.
 
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `src/main.c` | MPI + OpenMP Boruvka implementation |
+| `serial.c` | Serial baseline used for speedup |
+| `graph_generator.c` | Synthetic dense/sparse graph generator |
+| `hpc_tools.sh` | Build, graph generation, benchmark, and comparison commands |
+| `scripts/plot_results.py` | Regenerates the plots from `results/scaling.csv` |
+| `results/` | Raw and normalized benchmark data |
+| `report/` | Course report |
+| `docs/` | Benchmark notes and plots |
+
 ## Build and run
 
 Requirements: GCC with OpenMP, MPICH or OpenMPI, Python 3 with matplotlib for plots.
