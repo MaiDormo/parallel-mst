@@ -1,172 +1,92 @@
-# HPC Project: Distributed Parallel MST
+# parallel-mst
 
-![MPI](https://img.shields.io/badge/MPI-MPICH%203.2-blue?style=flat-square&logo=mpi)
-![OpenMP](https://img.shields.io/badge/OpenMP-Enabled-green?style=flat-square&logo=c)
-![License](https://img.shields.io/badge/License-MIT-lightgrey?style=flat-square)
+Hybrid MPI + OpenMP implementation of Boruvka's minimum spanning tree algorithm for dense
+graphs, written in C.
 
-A highly optimized, hybrid **MPI + OpenMP** implementation of **Boruvka's Algorithm** for finding the Minimum Spanning Tree (MST) across MPI ranks. Designed for speed, scalability, and memory efficiency.
+Each MPI rank owns a contiguous block of vertices and scans its rows with OpenMP. The graph is a
+flat, 64-byte-aligned symmetric `uint16_t` adjacency matrix, memory-mapped on rank 0 and broadcast
+once. Boruvka rounds use `MPI_Allreduce` over per-component minima; union-find with path
+compression tracks components.
 
----
+An earlier optimization pass replaced `fscanf` and per-row broadcasts with `mmap` and a single
+bulk broadcast; that input path is what the current code uses. The numbers below time the
+computation phase, not graph loading.
 
-## 🚀 Performance Highlights
+## Results
 
-| Metric | Baseline | Optimized | Improvement |
-| :--- | :--- | :--- | :--- |
-| **Total Execution (20k Nodes)** | 94.0s | **20.0s** | **4.7x Faster** |
-| **I/O Overhead** | 93s | **~1.2s** | **77x Faster** |
-| **Memory Access** | Indirect (Ptr-to-Ptr) | **Flat 1D (Contiguous)** | Cache Optimal |
+Single 64-core node (AMD EPYC 9334), 2 OpenMP threads per MPI rank, synthetic dense graphs
+(`m = n^2 / 4`). Best of three runs:
 
-> **Measured scope.** The 4.7× and 77× figures are from a single 64-thread node.
-> Parallel scaling was measured with **2, 4, 8, 16 and 32 MPI ranks on that one node**
-> (1 MPI rank : 2 OpenMP threads). Speedup flattens after 16 cores. This is **not** a
-> 32-node run, and the README does not claim one.
+| Graph | Best speedup | Median speedup | Time at best run | Configuration |
+|---:|---:|---:|---:|---|
+| 20k vertices | **10.87x** | 10.23x | 0.86s | 16 ranks / 32 threads |
+| 40k vertices | **12.87x** | 11.80x | 3.53s | 32 ranks / 64 threads |
+| 80k vertices | **11.61x** | 9.41x | 23.03s | 32 ranks / 64 threads |
 
-## 📖 Table of Contents
+The study covers 2, 4, 8, 16, and 32 MPI ranks. Speedup is relative to the serial implementation
+on the same node. The 20k graph stops scaling after 16 ranks; 40k and 80k keep scaling to 32.
+Total-thread efficiency falls from about 0.42 at 4 ranks to about 0.18 at 32, consistent with the
+O(V) collective becoming dominant.
 
-- [HPC Project: Distributed Parallel MST](#hpc-project-distributed-parallel-mst)
-  - [🚀 Performance Highlights](#-performance-highlights)
-  - [📖 Table of Contents](#-table-of-contents)
-  - [✨ Key Features](#-key-features)
-  - [🛠 Architecture \& Optimizations](#-architecture--optimizations)
-    - [1. Memory Layout](#1-memory-layout)
-    - [2. Computation](#2-computation)
-    - [3. Communication](#3-communication)
-  - [📂 Project Structure](#-project-structure)
-  - [⚙️ Build \& Run](#️-build--run)
-    - [Prerequisites](#prerequisites)
-    - [1. Compile](#1-compile)
-    - [2. Generate Data](#2-generate-data)
-    - [3. Run Locally](#3-run-locally)
-  - [☁️ Cluster Deployment](#️-cluster-deployment)
-  - [📊 Analysis \& Benchmarking](#-analysis--benchmarking)
-  - [🛣 Future Roadmap](#-future-roadmap)
+![Speedup](docs/plots/speedup.png)
 
----
+![Efficiency](docs/plots/efficiency.png)
 
-## ✨ Key Features
+The plots use the best of three runs because the shared cluster produced one-sided I/O
+contention: one 20k/8-rank run took 44.6s against 1.4s best. `results/scaling.csv` keeps every
+run; `docs/benchmarking.md` has the full table with medians and the outlier notes.
 
-- **Hybrid Parallelism:** Uses MPI for inter-rank communication and OpenMP for intra-node threading.
-- **Vectorized Compute:** SIMD-friendly loops utilizing AVX2/AVX-512 instructions.
-- **Zero-Copy I/O:** Memory-mapped file reading (`mmap`) for instant graph loading.
-- **Automated Tooling:** Complete suite for graph generation, benchmarking, and result plotting.
+## Design
 
-## 🛠 Architecture & Optimizations
+- **Partitioning:** rank `r` owns a contiguous block of roughly `V / P` vertices.
+- **Round 1:** each vertex picks its lightest incident edge; `MPI_Allreduce(MPI_MAX)` over an
+  `N`-element array gives every rank the global choice.
+- **Later rounds:** each rank finds the lightest edge leaving each local component; a custom
+  `MPI_Allreduce` min over `(weight, from, to)` selects one edge per component.
+- **Union-find:** union by rank and full path compression; trees are flattened before each round
+  so component checks are near O(1).
+- **Memory:** flat symmetric `uint16_t` matrix, 64-byte aligned, with a second matrix for the MST.
+  Internal edges are overwritten with `UINT16_MAX` to prune later rounds.
+- **I/O:** rank 0 `mmap`s the text graph and parses it with a small integer parser; the matrix is
+  broadcast once, with chunking for inputs above `INT_MAX` bytes.
+- **OpenMP:** static-scheduled loops over each rank's vertex block; compiler autovectorization on
+  the row scans.
 
-This project moves beyond standard implementations by addressing hardware-level bottlenecks:
+Memory is O(V^2) per rank because every rank holds the full matrix. At 80k vertices that is about
+12.8 GB per matrix, or 25.6 GB for the graph plus MST, which is why the 80k runs require a
+large-memory node.
 
-### 1. Memory Layout
-* **Flattened 1D Arrays:** Replaced `uint16_t**` with `uint16_t*` aligned to 64-byte boundaries. This enables hardware prefetching and eliminates pointer-chasing overhead.
-* **Branchless Logic:** Uses a symmetric $N \times N$ matrix to remove `if (row < col)` branching inside hot loops, preventing pipeline flushes.
+## Build and run
 
-### 2. Computation
-* **SIMD Vectorization:** Inner loops are refactored to be autovectorizable, processing 16-32 edge weights per CPU cycle.
-* **Logical Edge Pruning:** Edges connecting vertices within the same component are marked as `MAX_VALUE` to skip expensive union-find lookups in subsequent iterations.
-* **Static Scheduling:** OpenMP `schedule(static)` is used to eliminate dynamic scheduling lock contention.
-
-### 3. Communication
-* **Bulk Broadcasting:** Replaced row-by-row broadcasting with a single bulk `MPI_Bcast`, saturating the interconnect bandwidth.
-* **Tree Flattening:** Explicit path compression before parallel regions ensures $O(1)$ component lookups.
-
----
-
-## 📂 Project Structure
+Requirements: GCC with OpenMP, MPICH or OpenMPI, Python 3 with matplotlib for plots.
 
 ```bash
-├── src/
-│   ├── new_main.c                  # Optimized MPI+OpenMP implementation
-│   └── main.c                      # Baseline implementation
-├── utils/
-│   ├── plot_tools.py               # Visualization tools (example)
-├── hpc_tools.sh                    # Unified script for cluster/remote usage
-├── hpc_tools_local.sh              # Unified script for local usage
-├── Makefile                        # Build automation
-└── README.md
-
-```
-
----
-
-## ⚙️ Build & Run
-
-### Prerequisites
-
-* GCC (with OpenMP support)
-* MPICH or OpenMPI
-
-### 1. Compile
-
-```bash
-
-# For cluster/remote usage:
-./hpc_tools.sh compile
-
-# For local usage:
-./hpc_tools_local.sh compile
-
-```
-
-*Compiler Flags Used:* `-O3 -fopenmp -march=native -ftree-vectorize -funroll-loops -std=gnu11`
-
-### 2. Generate Data
-
-```bash
-
-# To generate graphs (cluster/remote):
-./hpc_tools.sh generate-graphs
-
-# To generate graphs (local):
-./hpc_tools_local.sh generate-graphs
-
-```
-
-### 3. Run Locally
-
-```bash
-
-# To benchmark (cluster/remote):
+make
+python3 -m pip install -r utils/requirements.txt
+./hpc_tools.sh generate-graphs   # the 80k dense graph needs a large disk
 ./hpc_tools.sh benchmark
-
-# To benchmark (local):
-./hpc_tools_local.sh benchmark
-
-# To compare implementations (cluster/remote):
-./hpc_tools.sh compare
-
-# To compare implementations (local):
-./hpc_tools_local.sh compare
-
+./hpc_tools.sh plot
 ```
 
----
+`./hpc_tools.sh benchmark-scaling` reproduces the 2-32 rank study on
+`graphs/graph_*_dense.txt` (long; run it through PBS on the cluster). `./hpc_tools.sh compare`
+checks that serial and parallel return the same MST weight.
 
-## ☁️ Cluster Deployment
+The binaries are `build/serial`, `build/parallel`, and `build/graph_generator`.
 
-Designed for PBS/Torque clusters (e.g., typically found in HPC environments).
+## Report
 
-| Command | Description |
-| --- | --- |
-| `./hpc_tools.sh pbs-job serial|parallel|graph-gen` | Print a PBS job script for the given type |
+The course report, with the algorithm description, data-dependency analysis, PBS setup, and
+discussion, is in
+[`report/HPC_Report_Bitussi_Gatti.pdf`](report/HPC_Report_Bitussi_Gatti.pdf).
 
+## Limitations
 
-**PBS job script generation example:**
-
-```bash
-# Print a PBS script for a parallel job:
-./hpc_tools.sh pbs-job parallel > submit_parallel.pbs
-```
-
----
-
-
-## 📊 Analysis & Benchmarking
-
-Use the `compare` command in the unified scripts to compare implementations and collect results. You can further analyze output logs or results as needed.
-
----
-
-## 🛣 Future Roadmap
-
-* [ ] **Sparse Matrix Support:** Switch to CSR (Compressed Sparse Row) format to support N > 100,000 graphs.
-* [ ] **Asynchronous MPI:** Implement `MPI_Iallreduce` to overlap communication with computation.
-* [ ] **Hierarchical Merging:** Implement a divide-and-conquer strategy for massive scale (>1M nodes).
-* [ ] **GPU Offloading:** Port local edge scanning to CUDA/OpenACC.
+- Benchmarks are from one 64-core node, not a multi-node cluster; "MPI ranks" here means
+  processes on that node.
+- The graph representation is dense and O(V^2) per rank, so it does not scale to sparse graphs
+  with millions of vertices.
+- Edge weights must fit in `uint16_t`.
+- The all-to-all collective each round sends O(V) data per rank; this is the main scaling limit
+  at 32 ranks.
+- One 80k/8-rank run is missing from the CSV; the remaining two were used.

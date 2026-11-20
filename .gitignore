@@ -80,3 +80,10 @@ hpc_cmp_impl_*
 
 #python
 requirements.txt
+# build outputs
+build/
+graph_generator
+
+# benchmark data is source, not generated output
+!results/scaling.csv
+!results/scaling_raw.csv

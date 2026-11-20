@@ -1,69 +1,128 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Build, generate graphs, and run the MST benchmarks.
+#
+# Usage:
+#   ./hpc_tools.sh compile
+#   ./hpc_tools.sh generate-graphs
+#   ./hpc_tools.sh benchmark
+#   ./hpc_tools.sh benchmark-scaling [graph_dir] [output_csv]
+#   ./hpc_tools.sh compare
+#   ./hpc_tools.sh plot
 
-# hpc_tools.sh: Unified script for compilation, graph generation, benchmarking, and PBS job submission
-# Usage: ./hpc_tools.sh <command> [args]
-# Commands:
-#   compile                Compile all C implementations
-#   generate-graphs        Generate graphs for all sizes/densities
-#   benchmark              Run all benchmarks (serial and parallel)
-#   compare                Compare implementations
+set -euo pipefail
 
-set -e
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD="$ROOT/build"
 
-PROJECT_DIR="$HOME/parallel_mst"
-SRC_DIR="$PROJECT_DIR/src"
-
-function compile_all() {
-    echo "Compiling serial implementation..."
-    gcc -O3 "$PROJECT_DIR/serial.c" -o "$PROJECT_DIR/serial.o"
-    echo "Compiling parallel implementation..."
-    mpicc -O3 -fopenmp -march=native -mtune=native -flto -funroll-loops -ftree-vectorize -o "$SRC_DIR/main.o" "$SRC_DIR/main.c"
-    echo "Compiling graph generator..."
-    gcc -O3 -fopenmp "$PROJECT_DIR/graph_generator.c" -o "$PROJECT_DIR/graph_generator"
-    echo "Compilation complete."
+compile_all() {
+    make -C "$ROOT"
 }
 
-function generate_graphs() {
-    mkdir -p "$PROJECT_DIR/graphs"
-    VERTICES=(1000 1500 2000 5000 10000 20000 40000 80000)
-    for v in "${VERTICES[@]}"; do
-        sparse_edges=$((v * 2))
-        medium_edges=$((v * $(echo "l($v)/l(2)" | bc -l | cut -d'.' -f1)))
-        dense_edges=$((v * v / 4))
-        echo "Generating graphs for $v vertices..."
-        "$PROJECT_DIR/graph_generator" $v $sparse_edges "$PROJECT_DIR/graphs/graph_${v}_sparse.txt"
-        "$PROJECT_DIR/graph_generator" $v $medium_edges "$PROJECT_DIR/graphs/graph_${v}_medium.txt"
-        "$PROJECT_DIR/graph_generator" $v $dense_edges "$PROJECT_DIR/graphs/graph_${v}_dense.txt"
+generate_graphs() {
+    mkdir -p "$ROOT/graphs"
+    local vertices=(1000 1500 2000 5000 10000 20000 40000 80000)
+    for v in "${vertices[@]}"; do
+        local sparse_edges=$((v * 2))
+        local medium_edges
+        medium_edges=$(awk -v n="$v" 'BEGIN { printf "%d", n * log(n) / log(2) }')
+        local dense_edges=$((v * v / 4))
+        echo "Generating ${v}-vertex graphs..."
+        "$BUILD/graph_generator" "$v" "$sparse_edges" "$ROOT/graphs/graph_${v}_sparse.txt"
+        "$BUILD/graph_generator" "$v" "$medium_edges" "$ROOT/graphs/graph_${v}_medium.txt"
+        "$BUILD/graph_generator" "$v" "$dense_edges" "$ROOT/graphs/graph_${v}_dense.txt"
     done
-    echo "Graph generation complete!"
+    echo "Graphs written to $ROOT/graphs"
 }
 
-function benchmark() {
-    for graph in "$PROJECT_DIR/graphs/graph_*_*.txt"; do
-        num_vertices=$(head -n 1 "$graph" | cut -d' ' -f1)
-        echo "============================================"
-        echo "Testing $graph..."
-        echo "Running serial implementation..."
-        "$PROJECT_DIR/serial.o" "$num_vertices" "$graph"
-        echo "Running parallel implementation..."
-        mpirun -np 2 --bind-to none -x OMP_NUM_THREADS=4 "$SRC_DIR/main.o" "$num_vertices" "$graph"
-    done
-}
-
-function compare() {
-    for graph in "$PROJECT_DIR/graphs/graph_*_*.txt"; do
-        num_vertices=$(head -n 1 "$graph" | cut -d' ' -f1)
-        echo "============================================"
-        echo "Testing $graph..."
-        echo "Running serial implementation..."
-        serial_output=$("$PROJECT_DIR/serial.o" "$num_vertices" "$graph")
-        serial_weight=$(echo "$serial_output" | grep "MST Weight:" | head -n1 | grep -o '[0-9]\+')
-        serial_time=$(echo "$serial_output" | grep "Computation Time:" | head -n1 | grep -o '[0-9.]*')
-        echo "Running parallel implementation..."
-        parallel_output=$(mpirun -np 2 --bind-to none -x OMP_NUM_THREADS=4 "$SRC_DIR/main.o" "$num_vertices" "$graph")
-        parallel_weight=$(echo "$parallel_output" | grep "MST Weight:" | head -n1 | grep -o '[0-9]\+')
-        parallel_time=$(echo "$parallel_output" | grep "Computation Time:" | head -n1 | grep -o '[0-9.]*')
-        echo "Serial: weight=$serial_weight, time=$serial_time"
-        echo "Parallel: weight=$parallel_weight, time=$parallel_time"
+benchmark() {
+    shopt -s nullglob
+    local graphs=("$ROOT"/graphs/graph_*_*.txt)
+    if [ ${#graphs[@]} -eq 0 ]; then
+        echo "No graph files found in $ROOT/graphs; run generate-graphs first." >&2
+        exit 1
+    fi
+    for graph in "${graphs[@]}"; do
+        local n
+        n=$(head -n 1 "$graph" | awk '{print $1}')
+        echo "== $graph =="
+        "$BUILD/serial" "$n" "$graph"
+        mpirun -np 2 --bind-to none -x OMP_NUM_THREADS=2 \
+            "$BUILD/parallel" "$n" "$graph"
     done
 }
+
+benchmark_scaling() {
+    local graph_dir="${1:-$ROOT/graphs}"
+    local output="${2:-$ROOT/results/scaling_new.csv}"
+    local repeats="${REPEATS:-3}"
+    local ranks_list=(2 4 8 16 32)
+    local threads_per_rank=2
+
+    shopt -s nullglob
+    local graphs=("$graph_dir"/graph_*_dense.txt)
+    if [ ${#graphs[@]} -eq 0 ]; then
+        echo "No dense graph files found in $graph_dir." >&2
+        exit 1
+    fi
+
+    mkdir -p "$(dirname "$output")"
+    echo "run,nodes,mpi_ranks,threads_per_rank,total_threads,parallel_s,serial_s" > "$output"
+    for graph in "${graphs[@]}"; do
+        local n
+        n=$(head -n 1 "$graph" | awk '{print $1}')
+        for run in $(seq 1 "$repeats"); do
+            local serial_out serial_s
+            serial_out=$("$BUILD/serial" "$n" "$graph")
+            serial_s=$(awk '/Computation Time/ {print $3; exit}' <<< "$serial_out")
+            for ranks in "${ranks_list[@]}"; do
+                local parallel_out parallel_s
+                parallel_out=$(mpirun -np "$ranks" --bind-to none \
+                    -x OMP_NUM_THREADS="$threads_per_rank" \
+                    "$BUILD/parallel" "$n" "$graph")
+                parallel_s=$(awk '/Computation Time/ {print $3; exit}' <<< "$parallel_out")
+                echo "$run,$n,$ranks,$threads_per_rank,$((ranks * threads_per_rank)),$parallel_s,$serial_s" >> "$output"
+                echo "n=$n run=$run ranks=$ranks serial=${serial_s}s parallel=${parallel_s}s"
+            done
+        done
+    done
+    echo "Wrote $output"
+}
+
+compare() {
+    shopt -s nullglob
+    local graphs=("$ROOT"/graphs/graph_*_*.txt)
+    if [ ${#graphs[@]} -eq 0 ]; then
+        echo "No graph files found in $ROOT/graphs; run generate-graphs first." >&2
+        exit 1
+    fi
+    for graph in "${graphs[@]}"; do
+        local n serial_out parallel_out serial_weight serial_time parallel_weight parallel_time
+        n=$(head -n 1 "$graph" | awk '{print $1}')
+        echo "== $graph =="
+        serial_out=$("$BUILD/serial" "$n" "$graph")
+        serial_weight=$(awk -F: '/Total MST Weight/ {gsub(/ /, "", $2); print $2}' <<< "$serial_out")
+        serial_time=$(awk -F: '/Computation Time/ {gsub(/ /, "", $2); print $2}' <<< "$serial_out")
+        parallel_out=$(mpirun -np 4 "$BUILD/parallel" "$n" "$graph")
+        parallel_weight=$(awk -F: '/Total MST Weight/ {gsub(/ /, "", $2); print $2}' <<< "$parallel_out")
+        parallel_time=$(awk -F: '/Computation Time/ {gsub(/ /, "", $2); print $2}' <<< "$parallel_out")
+        echo "serial:   weight=$serial_weight time=${serial_time}s"
+        echo "parallel: weight=$parallel_weight time=${parallel_time}s"
+    done
+}
+
+plot() {
+    python3 "$ROOT/scripts/plot_results.py"
+}
+
+case "${1:-}" in
+    compile) compile_all ;;
+    generate-graphs) generate_graphs ;;
+    benchmark) benchmark ;;
+    benchmark-scaling) shift; benchmark_scaling "$@" ;;
+    compare) compare ;;
+    plot) plot ;;
+    *)
+        echo "Usage: $0 <compile|generate-graphs|benchmark|benchmark-scaling|compare|plot>" >&2
+        exit 1
+        ;;
+esac
