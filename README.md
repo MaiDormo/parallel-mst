@@ -50,8 +50,8 @@ the outlier notes.
   Internal edges are overwritten with `UINT16_MAX` to prune later rounds.
 - **I/O:** rank 0 `mmap`s the text graph and parses it with a small integer parser; the matrix is
   broadcast once, with chunking for inputs above `INT_MAX` bytes.
-- **OpenMP:** static-scheduled loops over each rank's vertex block; compiler autovectorization on
-  the row scans.
+- **OpenMP:** static-scheduled loops over each rank's vertex block; the build enables compiler
+  vectorization for the row scans.
 
 Memory is O(V^2) per rank because every rank holds the full matrix. At 80k vertices that is about
 12.8 GB per matrix, or 25.6 GB for the graph plus MST, which is why the 80k runs require a
