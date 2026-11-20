@@ -4,7 +4,7 @@
 ![OpenMP](https://img.shields.io/badge/OpenMP-Enabled-green?style=flat-square&logo=c)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey?style=flat-square)
 
-A highly optimized, hybrid **MPI + OpenMP** implementation of **Boruvka's Algorithm** for finding the Minimum Spanning Tree (MST) on distributed clusters. Designed for speed, scalability, and memory efficiency.
+A highly optimized, hybrid **MPI + OpenMP** implementation of **Boruvka's Algorithm** for finding the Minimum Spanning Tree (MST) across MPI ranks. Designed for speed, scalability, and memory efficiency.
 
 ---
 
@@ -15,6 +15,11 @@ A highly optimized, hybrid **MPI + OpenMP** implementation of **Boruvka's Algori
 | **Total Execution (20k Nodes)** | 94.0s | **20.0s** | **4.7x Faster** |
 | **I/O Overhead** | 93s | **~1.2s** | **77x Faster** |
 | **Memory Access** | Indirect (Ptr-to-Ptr) | **Flat 1D (Contiguous)** | Cache Optimal |
+
+> **Measured scope.** The 4.7× and 77× figures are from a single 64-thread node.
+> Parallel scaling was measured with **2, 4, 8, 16 and 32 MPI ranks on that one node**
+> (1 MPI rank : 2 OpenMP threads). Speedup flattens after 16 cores. This is **not** a
+> 32-node run, and the README does not claim one.
 
 ## 📖 Table of Contents
 
