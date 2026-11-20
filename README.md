@@ -32,7 +32,7 @@ O(V) collective becoming dominant.
 
 ![Efficiency](docs/plots/efficiency.png)
 
-The plots use the best of three runs because the shared cluster produced one-sided I/O
+The plots use the best of three runs because the shared cluster produced occasional
 contention: one 20k/8-rank run took 44.6s against 1.4s best. [`results/scaling.csv`](results/scaling.csv)
 keeps every run; [`docs/benchmarking.md`](docs/benchmarking.md) has the full table with medians and
 the outlier notes.

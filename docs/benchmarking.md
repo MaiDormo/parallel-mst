@@ -58,14 +58,15 @@ The raw course spreadsheet is `results/scaling_raw.csv` with the original column
 
 ## Noise and outliers
 
-The cluster is shared and the 80k input is I/O-heavy, so wall time varied between runs. The raw
-CSV keeps every run. Two entries are worth calling out:
+The cluster is shared and the 80k input is large, so run time varied between runs. The raw CSV
+keeps every run. Two entries are worth calling out:
 
 - 20k with 8 ranks: one run took 44.6s against 1.4s and 4.0s in the other two. The 44.6s run is
-  an I/O-contention outlier; the best run is 6.54x and the median is pulled down to 2.83x.
+  a contention outlier; the best run is 6.54x and the median is pulled down to 2.83x.
 - 40k with 2 ranks: one run reported 9.4s parallel and 10.45s serial, while the other two
-  reported 31-52s parallel and 47-55s serial. Both phases were about 5x faster in that run, so it
-  does not change the best speedup (1.77x) but it affects the median.
+  reported 31-52s parallel and 47-55s serial. Both phases were about 5x faster in that run,
+  likely a different node or cache state, so it does not change the best speedup (1.77x) but it
+  affects the median.
 
 The plots in `docs/plots/` use the best run per configuration, which is the least contended
 measurement. The tables above also report the median so the spread is visible.
