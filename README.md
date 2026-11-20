@@ -45,7 +45,7 @@ A highly optimized, hybrid **MPI + OpenMP** implementation of **Boruvka's Algori
 
 ## ✨ Key Features
 
-- **Hybrid Parallelism:** Uses MPI for inter-node communication and OpenMP for intra-node threading.
+- **Hybrid Parallelism:** Uses MPI for inter-rank communication and OpenMP for intra-node threading.
 - **Vectorized Compute:** SIMD-friendly loops utilizing AVX2/AVX-512 instructions.
 - **Zero-Copy I/O:** Memory-mapped file reading (`mmap`) for instant graph loading.
 - **Automated Tooling:** Complete suite for graph generation, benchmarking, and result plotting.
