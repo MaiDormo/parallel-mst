@@ -74,12 +74,20 @@ benchmark_scaling() {
             local serial_out serial_s
             serial_out=$("$BUILD/serial" "$n" "$graph")
             serial_s=$(awk '/Computation Time/ {print $3; exit}' <<< "$serial_out")
+            if [ -z "$serial_s" ]; then
+                echo "Could not parse serial time for $graph" >&2
+                exit 1
+            fi
             for ranks in "${ranks_list[@]}"; do
                 local parallel_out parallel_s
                 parallel_out=$(mpirun -np "$ranks" --bind-to none \
                     -x OMP_NUM_THREADS="$threads_per_rank" \
                     "$BUILD/parallel" "$n" "$graph")
                 parallel_s=$(awk '/Computation Time/ {print $3; exit}' <<< "$parallel_out")
+                if [ -z "$parallel_s" ]; then
+                    echo "Could not parse parallel time for $graph at $ranks ranks" >&2
+                    exit 1
+                fi
                 echo "$run,$n,$ranks,$threads_per_rank,$((ranks * threads_per_rank)),$parallel_s,$serial_s" >> "$output"
                 echo "n=$n run=$run ranks=$ranks serial=${serial_s}s parallel=${parallel_s}s"
             done
