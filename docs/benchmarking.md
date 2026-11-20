@@ -16,7 +16,7 @@ Compiler flags for the parallel binary: `-O3 -fopenmp -march=native -mtune=nativ
 ## Workload
 
 Synthetic connected graphs with 20,000, 40,000, and 80,000 vertices. The generator creates a dense
-graph with `m = n^2 / 4` edges and random `uint16_t` weights. The graph is stored as a symmetric
+graph with approximately `m = n^2 / 4` edges and random `uint16_t` weights. The graph is stored as a symmetric
 adjacency matrix, so the 80k case needs about 12.8 GB per matrix and 25.6 GB for the graph plus
 the MST matrix.
 
